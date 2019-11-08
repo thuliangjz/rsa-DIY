@@ -37,14 +37,18 @@ class BigInteger {
         static pair<BigInteger, BigInteger> div(const BigInteger& a, const BigInteger& b); //compute a/b, return(q, r)
         static BigInteger euclidean(const BigInteger& a, const BigInteger& b);
         static BigIntegerPair partialExtendedEuclidean(const BigInteger& a, const BigInteger& n); //return (gcd, v) where av \equiv gcd \pmod n
-        //static BigInteger getPrimeWithin(BigInteger& min, BigInteger& max);
+        static BigInteger getPrimeWithin(const BigInteger& min, const BigInteger& max);
         static BigInteger randomWithin(const BigInteger& min,const BigInteger& max, std::random_device& generator); //thread safe so long as generator are thread-local
         static BigInteger fastExponent(const BigInteger& a, const BigInteger& e, const BigInteger& n); //compute a^e (mode n)
         static int compare(const BigInteger& left,const BigInteger& right); //return -1 if left < right, 1 if left > right, else 0
+        static const BigInteger zero;
+        static const BigInteger one;
+        static const BigInteger two;
         int getBitCnt()const{return m_cnt_bits;}
         vector<uint64_t> getBits()const{return m_vec_bits;}
         explicit BigInteger(const vector<uint64_t>&   vec);
         void printHex(int mode = PRINT_MODE_SPACED);
+        inline bool isEven()const;
     public:
         static const int ERR_EMPTY_VEC = 0;
         static const int ERR_DIV_ZERO = 1;      //zero divisor

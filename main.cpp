@@ -9,8 +9,10 @@ extern void testMul();
 extern void testEuclid();
 extern void testRandom();
 extern void testExponent();
+extern void testPrime();
+extern void testShr();
 int main() {
-    testExponent();
+    testPrime();
     return 0;
 }
 

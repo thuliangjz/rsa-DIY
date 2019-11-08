@@ -16,6 +16,10 @@
 using std::cout;
 using std::endl;
 
+const BigInteger BigInteger::zero(u64vec(1, 0));
+const BigInteger BigInteger::one(u64vec(1, 1));
+const BigInteger BigInteger::two(u64vec(1, 2));
+
 inline int getBitAt(const vector<uint64_t>& v, int m){
     return (v[m/64] >> static_cast<uint64_t>(m%64)) & UINT64_C(1);
 }
@@ -29,7 +33,7 @@ inline uint64_t __asm_shr(uint64_t a, int s){
             :"r"(a), "c"(s)
             :
             );
-    return r;
+    return s == 64 ? 0 : r;
 }
 
 
@@ -52,6 +56,10 @@ BigInteger::BigInteger(const vector<uint64_t>& vec):m_vec_bits(vec) {
     if(m_vec_bits.empty())
         throw BigIntegerException(ERR_EMPTY_VEC);
     m_cnt_bits = shrink(m_vec_bits);
+}
+
+inline bool BigInteger::isEven() const {
+    return getBitAt(m_vec_bits, 0) == 0;
 }
 
 BigInteger BigInteger::nBitMax(int n) {
@@ -148,17 +156,17 @@ inline void __asm_sub_from(vector<uint64_t>& a, vector<uint64_t> &b){
         "movq $0, %%rcx;"
         "clc;"
         "lahf;"
-        "loop_sub_from:"
+        "1:"
             "sahf;" //从寄存器中读取flag
             "movq (%%r8, %%rcx, 8), %%rax;"
             "sbb %%rax, (%%r9, %%rcx, 8);"
             "lahf;" //保存flag,后面的inc可能会破坏carry
             "inc %%rcx;"
             "cmp %%rcx, %%rdx;"
-            "jne loop_sub_from;"
+            "jne 1b;"
         :
         :"m"(pt_b), "m"(pt_a), "m"(length)
-        :"memory", "cc", "r8", "r9", "r10", "rdx", "rcx", "rax", "rbx");
+        :"memory", "cc", "r8", "r9", "rdx", "rcx", "rax", "rbx");
 }
 
 BigInteger BigInteger::add(const BigInteger &a, const BigInteger& b) {
@@ -188,7 +196,7 @@ BigInteger BigInteger::sub(const BigInteger &a, const BigInteger &b) {
             "movq $0, %%rcx;"
             "clc;"
             "lahf;"
-            "loop_sub:"
+            "1:"
                 "sahf;" //从寄存器中读取flag
                 "movq (%%r8, %%rcx, 8), %%rax;"
                 "movq (%%r9, %%rcx, 8), %%rbx;"
@@ -197,7 +205,7 @@ BigInteger BigInteger::sub(const BigInteger &a, const BigInteger &b) {
                 "movq %%rbx, (%%r10, %%rcx, 8);"
                 "inc %%rcx;"
                 "cmp %%rcx, %%rdx;"
-                "jne loop_sub;"
+                "jne 1b;"
             :
             :"m"(pt_b_bits), "m"(pt_a_bits), "m"(pt_result), "m"(max_len)
             :"memory", "cc", "r8", "r9", "r10", "rdx", "rcx", "rax", "rbx");
@@ -221,7 +229,7 @@ BigInteger BigInteger::mul(const BigInteger &a, const BigInteger &b) {
                 "movq %0, %%r8;"    //r8保存小乘数,维持不变(寄存器访问速度更快)
                 "clc;"
                 ASM_LOAD    //carry保存在r15中
-                "loop_mul_tmp:"
+                "1:"
                     "mov %%r8, %%rax;"
                     "mov (%%rsi, %%rcx, 8), %%rbx;"
                     "mul %%rbx;"    //乘法完成,结果保留在rdx:rax中
@@ -233,7 +241,7 @@ BigInteger BigInteger::mul(const BigInteger &a, const BigInteger &b) {
                     "mov %%rbx, (%%rdi, %%rcx, 8);" //本次计算结果保存到tmp数组
                     "inc %%rcx;"
                     "cmp %%rcx, %2;"    //是否已经执行了length_a次
-                    "jne loop_mul_tmp;"
+                    "jne 1b;"
                     ASM_RESTORE
                     "mov $0, %%rax;"
                     "adc %%r14, %%rax;"
@@ -252,14 +260,14 @@ BigInteger BigInteger::mul(const BigInteger &a, const BigInteger &b) {
             "movq $0, %%rcx;"
             "clc;"
             "lahf;"
-            "loop_mul_add:"
+            "1:"
                 "sahf;"
                 "movq (%%r8, %%rcx, 8), %%rax;"
                 "adc %%rax, (%%r9, %%rcx, 8);"  //将r8指向的数加到r9上
                 "lahf;"
                 "inc %%rcx;"
                 "cmp %%rcx, %%rdx;"
-                "jne loop_mul_add;"
+                "jne 1b;"
             :
             :"m"(pt_tmp), "m"(pt_result), "m"(length_tmp)
             :"memory", "cc", "r8", "r9", "rdx", "rcx", "rax", "rbx");
@@ -298,7 +306,7 @@ pair<BigInteger, BigInteger> BigInteger::div(const BigInteger &a, const BigInteg
         __asm_sub_from(a_bits, tmp);
         //更新l1的值,缩小a_bits
         l1 = shrink(a_bits);
-        tmp.resize(l1);
+        tmp.resize(a_bits.size());
         std::fill(tmp.begin(), tmp.end(), 0);
     }
     r = a_bits;
@@ -311,7 +319,6 @@ BigInteger BigInteger::euclidean(const BigInteger &a, const BigInteger &b) {
         small = b;
         big = a;
     }
-    BigInteger zero(u64vec(1, 0));
     while(compare(small, zero) == 1){
         BigIntegerPair qr = div(big, small);
         big = small; small = qr.second;
@@ -321,7 +328,7 @@ BigInteger BigInteger::euclidean(const BigInteger &a, const BigInteger &b) {
 
 BigIntegerPair BigInteger::partialExtendedEuclidean(const BigInteger &a, const BigInteger &n) {
     BigInteger small = div(a, n).second, big = n, n_square = mul(n, n);
-    BigInteger v(u64vec(1, 0)), f(u64vec(1, 1)), zero(u64vec(1, 0));
+    BigInteger v(u64vec(1, 0)), f(u64vec(1, 1));
     while(compare(small, zero) == 1){
         BigIntegerPair qr = div(big, small);
         big = small; small = qr.second;
@@ -374,6 +381,108 @@ BigInteger BigInteger::fastExponent(const BigInteger &a, const BigInteger &e, co
         basis = div(mul(basis, basis), n).second;
     }
     return result;
+}
+
+BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &max) {
+    std::random_device generator;
+    BigInteger n(u64vec(1, 0));
+    vector<BigInteger> n_sampled;
+    int tested = 0;
+    while(true){
+        while (true) {
+            n = randomWithin(min, max, generator);
+            if (n.isEven())
+                n = add(n, one);
+            if (compare(n, max) == 1)
+                continue;
+            bool sampled = false;
+            for(auto &b : n_sampled){
+                if(compare(b, n) == 0){
+                    sampled = true;
+                    break;
+                }
+            }
+            if(!sampled)
+                break;
+        }
+        int s = 0;
+
+//        u64vec tmp;
+//        tmp.push_back(0x4b0ceacd9b81bb47);
+//        tmp.push_back(0xb);
+//        n = BigInteger(tmp);
+
+        BigInteger n_minus_1 = sub(n, one);
+        u64vec n_minus_1_bits = n_minus_1.getBits();
+        while(getBitAt(n_minus_1_bits, s) == 0)
+            ++s;
+        u64vec d_bits(n_minus_1_bits.size(), 0);
+        for(int i = s; i < n.getBitCnt(); ++i){
+            d_bits[(i - s) / 64] |= static_cast<uint64_t >(getBitAt(n_minus_1_bits, i)) << static_cast<uint64_t>((i - s) % 64);
+        }
+        BigInteger d(d_bits);
+        bool is_prime = true;
+        vector<BigInteger> checked;
+        int upperbound = compare(n, BigInteger(u64vec(1, 50))) == -1 ? n.getBits()[0] - 2 : 50;
+        while(checked.size() < upperbound){
+            BigInteger a = zero;
+            //有一些数被抽取到的概率大一些,避免这些数被重复检测到
+            while(true){
+                a = randomWithin(two, n_minus_1, generator);
+                bool is_in_checked = false;
+                for(auto &b:checked){
+                    if(compare(a, b) == 0){
+                        is_in_checked = true;
+                        break;
+                    }
+                }
+                if(!is_in_checked){
+                    checked.push_back(a);
+                    break;
+                }
+            }
+
+//            u64vec fake_a;
+//            fake_a.push_back(0x468c654b82f33f45);
+//            fake_a.push_back(1);
+//            a = BigInteger(fake_a);
+
+            BigInteger basis = fastExponent(a, d, n);
+            if(compare(basis, one) == 0){
+                checked.push_back(a);
+                continue;
+            }
+            else{
+                bool neg_one_found = false;
+                for(int i = 0; i < s; ++i){
+                    if(compare(n_minus_1, basis) == 0){
+                        neg_one_found = true;
+                        break;
+                    }
+                    basis = div(mul(basis, basis), n).second;
+                }
+                if(!neg_one_found){
+                    is_prime = false;
+                    break;
+                }
+            }
+        }
+        if(is_prime){
+            cout<< "number tested:" <<tested << endl;
+            return n;
+        }
+        ++tested;
+    }
+}
+
+void testShr(){
+    uint64_t a = 0xffffffffffffffff;
+    cout << std::setw(16) << std::setfill('0') << std::hex << __asm_shr(a, 4) << endl;
+    cout << std::setw(16) << std::setfill('0') << std::hex << __asm_shr(a, 1) <<endl;
+    cout << std::setw(16) << std::setfill('0') << std::hex << __asm_shr(a, 0) <<endl;
+    cout << std::setw(16) << std::setfill('0') << std::hex << __asm_shr(a, 64) <<endl;
+    cout << std::setw(16) << std::setfill('0') << std::hex << __asm_shr(a, 65) << endl;
+    cout << std::setw(16) << std::setfill('0') << std::hex << __asm_shr(a, 63) << endl;
 }
 
 void test_asm_sub(){
@@ -435,23 +544,35 @@ void testMul(){
 }
 
 void testDiv(){
-    int compact_mode = BigInteger::PRINT_MODE_COMPACT;
-    u64vec a_bits, b_bits;
-    a_bits.push_back(5);
-    a_bits.push_back(0xf);
-    b_bits.push_back(0x1);
-    b_bits.push_back(0x1);
-    BigInteger a(a_bits), b(b_bits);
-    BigIntegerPair p = BigInteger::div(a, b);
-    cout << "divident: ";
-    a.printHex(compact_mode);
-    cout<< "divisor: ";
-    b.printHex(compact_mode);
+//    int compact_mode = BigInteger::PRINT_MODE_COMPACT;
+//    u64vec a_bits, b_bits;
+//    a_bits.push_back(5);
+//    a_bits.push_back(0xf);
+//    b_bits.push_back(0x1);
+//    b_bits.push_back(0x1);
+//    BigInteger a(a_bits), b(b_bits);
+//    BigIntegerPair p = BigInteger::div(a, b);
+//    cout << "divident: ";
+//    a.printHex(compact_mode);
+//    cout<< "divisor: ";
+//    b.printHex(compact_mode);
+//
+//    cout<< "q: ";
+//    p.first.printHex(compact_mode); //print q
+//    cout << "r: ";
+//    p.second.printHex(compact_mode);    //print r
+    u64vec a, b;
+    a.push_back(0x9f357a2209ab0161);
+    a.push_back(0x595266a26e2d89a5);
+    a.push_back(0x2);
+    b.push_back(0x4b0ceacd9b81bb47);
+    b.push_back(0xb);
+    BigIntegerPair qr = BigInteger::div(BigInteger(a), BigInteger(b));
+    BigInteger(a).printHex(BigInteger::PRINT_MODE_COMPACT);
+    BigInteger(b).printHex(BigInteger::PRINT_MODE_COMPACT);
+    qr.first.printHex(BigInteger::PRINT_MODE_COMPACT);
+    qr.second.printHex(BigInteger::PRINT_MODE_COMPACT);
 
-    cout<< "q: ";
-    p.first.printHex(compact_mode); //print q
-    cout << "r: ";
-    p.second.printHex(compact_mode);    //print r
 }
 
 void testEuclid(){
@@ -483,4 +604,8 @@ void testExponent(){
     e.push_back(1);
     n.push_back(10);
     BigInteger::fastExponent(BigInteger(a), BigInteger(e), BigInteger(n)).printHex();
+}
+
+void testPrime(){
+    BigInteger::getPrimeWithin(BigInteger::nBitMin(768),BigInteger::nBitMax(768)).printHex(BigInteger::PRINT_MODE_COMPACT);
 }
