@@ -221,7 +221,7 @@ BigInteger BigInteger::mul(const BigInteger &a, const BigInteger &b) {
     uint64_t *pt_a = &a_bits[0], *pt_b = &b_bits[0], *pt_result = &result[0], *pt_tmp = &tmp[0];
     uint64_t length_a = a_bits.size(), length_tmp = tmp.size();
     for(int i = 0; i < b_bits.size(); ++i){
-        uint64_t* pt_tmp_i = pt_tmp + i;
+        uint64_t* pt_tmp_i = pt_tmp + i, *pt_result_i = pt_result + i;
         asm volatile (
                 "movq $0, %%rdx;"
                 "movq $0, %%r14;"   //r14保存上一次乘法的溢出结果
@@ -255,6 +255,7 @@ BigInteger BigInteger::mul(const BigInteger &a, const BigInteger &b) {
         //tmp更后面的结果赋值为0,避免每次对tmp重新赋值
         std::fill(tmp.begin(), tmp.begin() + i, 0);
         //这段汇编完成的是将tmp的值加到result上面,注意两个向量长度相等
+        uint64_t la1 = length_a + 1;
         asm volatile (
             "movq %0, %%r8;"
             "movq %1, %%r9;"
@@ -270,8 +271,10 @@ BigInteger BigInteger::mul(const BigInteger &a, const BigInteger &b) {
                 "inc %%rcx;"
                 "cmp %%rcx, %%rdx;"
                 "jne 1b;"
+                "sahf;"
+                "adc $0, (%%r9, %%rcx, 8);"
             :
-            :"m"(pt_tmp), "m"(pt_result), "m"(length_tmp)
+            :"m"(pt_tmp_i), "m"(pt_result_i), "m"(la1)
             :"memory", "cc", "r8", "r9", "rdx", "rcx", "rax", "rbx");
     }
     return BigInteger(result);
