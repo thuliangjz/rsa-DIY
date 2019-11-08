@@ -44,20 +44,30 @@ class BigInteger {
         static const BigInteger zero;
         static const BigInteger one;
         static const BigInteger two;
+    public:
         int getBitCnt()const{return m_cnt_bits;}
         vector<uint64_t> getBits()const{return m_vec_bits;}
         explicit BigInteger(const vector<uint64_t>&   vec);
         void printHex(int mode = PRINT_MODE_SPACED);
         inline bool isEven()const;
+        BigInteger fastExponentNewton(const BigInteger& a, const BigInteger& e);
+        BigInteger reverse(int length)const;
+        BigInteger rightShift(int length)const;
+    private:
+        void computeInverse();
+        BigInteger getResidualWithInverse(const BigInteger& a, const BigInteger& inv) const;
     public:
         static const int ERR_EMPTY_VEC = 0;
         static const int ERR_DIV_ZERO = 1;      //zero divisor
         static const int ERR_MAX_SMALLER_THAN_RANGE = 2;
+        static const int ERR_NEG_DISCARDED_LENGTH = 3;
         static const int PRINT_MODE_SPACED = 0;
         static const int PRINT_MODE_COMPACT = 1;
     private:
         vector<uint64_t> m_vec_bits;
         int m_cnt_bits;
+        bool m_inverse_computed;
+        u64vec m_vec_inverse;       //m_vec_inverse的LSB表示2^{-2p}, p = m_cnt_bits
 };
 
 

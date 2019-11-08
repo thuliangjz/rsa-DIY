@@ -4,6 +4,8 @@
 #include <iostream>
 #include <iomanip>
 #include <random>
+
+#include <assert.h>
 //
 // Created by liangjz on 19-11-2.
 //
@@ -52,7 +54,7 @@ int BigInteger::shrink(vector<uint64_t> &vec) {
     return cnt_bits;
 }
 
-BigInteger::BigInteger(const vector<uint64_t>& vec):m_vec_bits(vec) {
+BigInteger::BigInteger(const vector<uint64_t>& vec):m_vec_bits(vec), m_inverse_computed(false) {
     if(m_vec_bits.empty())
         throw BigIntegerException(ERR_EMPTY_VEC);
     m_cnt_bits = shrink(m_vec_bits);
@@ -313,6 +315,92 @@ pair<BigInteger, BigInteger> BigInteger::div(const BigInteger &a, const BigInteg
     return std::make_pair(BigInteger(q), BigInteger(r));
 }
 
+BigInteger BigInteger::fastExponentNewton(const BigInteger &a, const BigInteger &e) {
+    int comp_result = compare(a, *this);
+    BigInteger a_mod(zero);
+    if(comp_result == 0)
+        return zero;
+    if(comp_result == 1)
+        a_mod = div(a, *this).second;
+    else
+        a_mod = a;
+    if(!m_inverse_computed)
+        computeInverse();
+    BigInteger inverse(m_vec_inverse), basis = a_mod, result = one;
+    int e_len = e.getBitCnt();
+    u64vec e_bits = e.getBits();
+    for(int i = 0; i < e_len; ++i){
+        if(getBitAt(e_bits, i)){
+            result = getResidualWithInverse(mul(basis, result), inverse);
+        }
+        basis = getResidualWithInverse(mul(basis, basis), inverse);
+    }
+    return result;
+}
+
+BigInteger BigInteger::getResidualWithInverse(const BigInteger &a, const BigInteger &inv) const {
+    //a <= this^2
+    BigInteger res = mul(mul(a, inv).rightShift(2 * m_cnt_bits), *this);
+    assert(compare(a, res) >= 0);
+    res = sub(a, res);
+    while(compare(res, *this) >= 0){
+        res = sub(res, *this);
+    }
+    return res;
+}
+
+BigInteger BigInteger::reverse(int length) const {
+    if(length <= 0)
+        throw BigIntegerException(ERR_EMPTY_VEC);
+    u64vec reversed((length - 1 )/ 64 + 1, 0);
+    int min_length = std::min(length, m_cnt_bits);
+    for(int i = 0; i < min_length; ++i){
+        reversed[(length - i - 1) / 64] |= static_cast<uint64_t >(getBitAt(m_vec_bits, i)) << static_cast<uint64_t >((length - i - 1) % 64);
+    }
+    return BigInteger(reversed);
+}
+
+BigInteger BigInteger::rightShift(int length) const {
+    if(length < 0)
+        throw BigIntegerException(ERR_NEG_DISCARDED_LENGTH);
+    if(m_cnt_bits <= length)
+        return zero;
+    int entry_discarded = length / 64, bit_discarded = length % 64;
+    //u64vec v((m_cnt_bits - 1 - length) / 64 + 1, 0);  //注意!!!v按照这种方式初始化长度将会引起最后一行的v[i]越界访问
+    u64vec v(m_vec_bits.size(), 0);
+    int i = 0;
+    for(; i < m_vec_bits.size() - entry_discarded - 1; ++i){
+        uint64_t a = __asm_shr(m_vec_bits[i + entry_discarded], bit_discarded);
+        uint64_t b = bit_discarded == 0 ? 0 : m_vec_bits[i + entry_discarded + 1] << static_cast<uint64_t >(64 - bit_discarded);
+        v[i] = a | b;
+    }
+    v[i] = __asm_shr(m_vec_bits[i + entry_discarded], bit_discarded);
+    return BigInteger(v);
+}
+
+void BigInteger::computeInverse() {
+    u64vec x_init_bit(m_vec_bits.size() + 1, 0);
+    //初始值设置成2^{-p},p = m_cnt_bits;
+    x_init_bit[m_cnt_bits / 64] |= UINT64_C(1) << static_cast<uint64_t >(m_cnt_bits % 64);
+    BigInteger x(x_init_bit);
+    u64vec one_bit(2 * m_cnt_bits / 64 + 1, 0); //one_with_decimal一共2p+1位, LSB是2^{-2p}, 从而MSB表示1
+    one_bit.back() |= UINT64_C(1) << static_cast<uint64_t >((2 * m_cnt_bits) % 64);
+    BigInteger one_with_decimal(one_bit);
+
+    while(true){
+        BigInteger tmp = mul(x, *this);
+        assert(compare(one_with_decimal, tmp) >= 0); //注意不论何时都应该有comp(one, mul...) >=0
+        BigInteger delta = sub(one_with_decimal, tmp);
+        //当x与(1 - nx)相乘的时候,需要把LSB变成1才能使用通常意义上的乘法,乘完之后再次反向也就完成了舍入
+        BigInteger delta_x = mul(x.reverse(2 * m_cnt_bits + 1), delta.reverse(2 * m_cnt_bits + 1)).reverse(2 * m_cnt_bits + 1);
+        if(compare(delta_x, zero) == 0)
+            break;
+        x = add(x, delta_x);
+    }
+    m_vec_inverse = x.getBits();
+    m_inverse_computed = true;
+}
+
 BigInteger BigInteger::euclidean(const BigInteger &a, const BigInteger &b) {
     BigInteger small(a), big(b);
     if(compare(a, b) == 1){
@@ -388,6 +476,7 @@ BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &m
     BigInteger n(u64vec(1, 0));
     vector<BigInteger> n_sampled;
     int tested = 0;
+    int newton_tested = 0;
     while(true){
         while (true) {
             n = randomWithin(min, max, generator);
@@ -406,11 +495,6 @@ BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &m
                 break;
         }
         int s = 0;
-
-//        u64vec tmp;
-//        tmp.push_back(0x4b0ceacd9b81bb47);
-//        tmp.push_back(0xb);
-//        n = BigInteger(tmp);
 
         BigInteger n_minus_1 = sub(n, one);
         u64vec n_minus_1_bits = n_minus_1.getBits();
@@ -442,14 +526,19 @@ BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &m
                 }
             }
 
-//            u64vec fake_a;
-//            fake_a.push_back(0x468c654b82f33f45);
-//            fake_a.push_back(1);
-//            a = BigInteger(fake_a);
-
-            BigInteger basis = fastExponent(a, d, n);
+            //BigInteger basis = fastExponent(a, d, n);
+            BigInteger basis = n.fastExponentNewton(a, d);
+//            BigInteger basis_newton = n.fastExponentNewton(a, d);
+//            cout << ++newton_tested<<endl;
+//            if(compare(basis, basis_newton) != 0){
+//                cout << "a: "; a.printHex();
+//                cout << "d: "; d.printHex();
+//                cout << "n: "; n.printHex();
+//                cout << "basis: "; basis.printHex();
+//                cout << "basis_newton: "; basis_newton.printHex();
+//            }
+//            assert(compare(basis, basis_newton) == 0);
             if(compare(basis, one) == 0){
-                checked.push_back(a);
                 continue;
             }
             else{
@@ -459,7 +548,8 @@ BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &m
                         neg_one_found = true;
                         break;
                     }
-                    basis = div(mul(basis, basis), n).second;
+                    //basis = div(mul(basis, basis), n).second;
+                    basis = n.fastExponentNewton(basis, two);
                 }
                 if(!neg_one_found){
                     is_prime = false;
@@ -608,4 +698,64 @@ void testExponent(){
 
 void testPrime(){
     BigInteger::getPrimeWithin(BigInteger::nBitMin(768),BigInteger::nBitMax(768)).printHex(BigInteger::PRINT_MODE_COMPACT);
+}
+
+void testReverse(){
+    u64vec a;
+    a.push_back(0xfffffffffff7f18);
+    a.push_back(0xf);
+    BigInteger i(a);
+    i.reverse(5).printHex();
+    i.reverse(2).printHex();
+    i.reverse(i.getBitCnt()).printHex();
+    i.reverse(100).printHex();
+}
+
+void testRightShift(){
+    u64vec a;
+    a.push_back(0xf0f);
+    a.push_back(1);
+    BigInteger i(a);
+    i.rightShift(0).printHex();
+    i.rightShift(1).printHex();
+    i.rightShift(65).printHex();
+    i.rightShift(66).printHex();
+    i.rightShift(100).printHex();
+}
+
+void testExponentNewton(){
+    u64vec a_bit, d_bit, n_bit;
+//    a_bit.push_back(0x3ad150b526d1243a);
+//    a_bit.push_back(0x66da4a2f);
+//
+//
+//    d_bit.push_back(0x60fba39bfb5f89a3);
+//    d_bit.push_back(0x2faf37b3b);
+//
+//    n_bit.push_back(0x0c03034c7d74bfe0);
+//    n_bit.push_back(0x0000000bebcdeced);
+    a_bit.push_back(0x4f327b4b23ca1d83);
+    a_bit.push_back(  0x757611c9c6f11e1a);
+    a_bit.push_back(0x19bc842d18cc06f4);
+    a_bit.push_back(0x32);
+
+    d_bit.push_back(0x397deba7fedbc1af);
+    d_bit.push_back(0x48e5b8866f883681);
+    d_bit.push_back(0x9e13df545ad88d7f);
+    d_bit.push_back(0x40);
+
+    n_bit.push_back(0x72fbd74ffdb7835f);
+    n_bit.push_back( 0x91cb710cdf106d02);
+    n_bit.push_back(0x3c27bea8b5b11afe);
+    n_bit.push_back(0x81);
+
+    BigInteger a(a_bit), d(d_bit), n(n_bit);
+    cout<<"a: 0x";
+    a.printHex(BigInteger::PRINT_MODE_COMPACT);
+    cout << "d: 0x";
+    d.printHex(BigInteger::PRINT_MODE_COMPACT);
+    cout << "n: 0x";
+    n.printHex(BigInteger::PRINT_MODE_COMPACT);
+    BigInteger::fastExponent(a, d, n).printHex(BigInteger::PRINT_MODE_COMPACT);
+    n.fastExponentNewton(a, d).printHex(BigInteger::PRINT_MODE_COMPACT);
 }

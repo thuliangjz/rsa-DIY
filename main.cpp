@@ -11,6 +11,9 @@ extern void testRandom();
 extern void testExponent();
 extern void testPrime();
 extern void testShr();
+extern void testReverse();
+extern void testRightShift();
+extern void testExponentNewton();
 int main() {
     testPrime();
     return 0;
