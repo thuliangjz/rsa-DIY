@@ -4,7 +4,8 @@
 #include <iostream>
 #include <iomanip>
 #include <random>
-
+#include <chrono>
+#include <thread>
 #include <assert.h>
 //
 // Created by liangjz on 19-11-2.
@@ -17,6 +18,8 @@
 
 using std::cout;
 using std::endl;
+using std::chrono::duration_cast;
+using std::chrono::system_clock;
 
 const BigInteger BigInteger::zero(u64vec(1, 0));
 const BigInteger BigInteger::one(u64vec(1, 1));
@@ -106,7 +109,7 @@ int BigInteger::compare(const BigInteger& left,const BigInteger& right) {
     if(left.getBitCnt() > right.getBitCnt())
         return 1;
     int entry_cnt = (left.getBitCnt() - 1) / 64;
-    vector<uint64_t> v1 = left.getBits(), v2 = right.getBits();
+    const vector<uint64_t> &v1 = left.getConstVector(), &v2 = right.getConstVector();
     for(int i = entry_cnt; i >= 0; --i){
         if(v1[i] > v2[i])
             return 1;
@@ -474,22 +477,28 @@ BigInteger BigInteger::fastExponent(const BigInteger &a, const BigInteger &e, co
     return result;
 }
 
-BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &max) {
+void getPrimeWorker(const BigInteger *min, const BigInteger *max, std::mutex *mutex, bool *finish_flag,
+                                u64vec *result, int test_iter_cnt) {
     std::random_device generator;
     BigInteger n(u64vec(1, 0));
     vector<BigInteger> n_sampled;
-    int tested = 0;
-    int newton_tested = 0;
+    int tested = 1;
     while(true){
+        bool finished;
+        mutex->lock();
+        finished = *finish_flag;
+        mutex->unlock();
+        if(finished)
+            break;
         while (true) {
-            n = randomWithin(min, max, generator);
+            n = BigInteger::randomWithin(*min, *max, generator);
             if (n.isEven())
-                n = add(n, one);
-            if (compare(n, max) == 1)
+                n = BigInteger::add(n, BigInteger::one);
+            if (BigInteger::compare(n, *max) == 1)
                 continue;
             bool sampled = false;
             for(auto &b : n_sampled){
-                if(compare(b, n) == 0){
+                if(BigInteger::compare(b, n) == 0){
                     sampled = true;
                     break;
                 }
@@ -499,7 +508,7 @@ BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &m
         }
         int s = 0;
 
-        BigInteger n_minus_1 = sub(n, one);
+        BigInteger n_minus_1 = BigInteger::sub(n, BigInteger::one);
         u64vec n_minus_1_bits = n_minus_1.getBits();
         while(getBitAt(n_minus_1_bits, s) == 0)
             ++s;
@@ -510,15 +519,15 @@ BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &m
         BigInteger d(d_bits);
         bool is_prime = true;
         vector<BigInteger> checked;
-        int upperbound = compare(n, BigInteger(u64vec(1, 50))) == -1 ? n.getBits()[0] - 2 : 50;
+        int upperbound = BigInteger::compare(n, BigInteger(u64vec(1, test_iter_cnt))) == -1 ? n.getBits()[0] - 2 : test_iter_cnt;
         while(checked.size() < upperbound){
-            BigInteger a = zero;
+            BigInteger a = BigInteger::zero;
             //有一些数被抽取到的概率大一些,避免这些数被重复检测到
             while(true){
-                a = randomWithin(two, n_minus_1, generator);
+                a = BigInteger::randomWithin(BigInteger::two, n_minus_1, generator);
                 bool is_in_checked = false;
                 for(auto &b:checked){
-                    if(compare(a, b) == 0){
+                    if(BigInteger::compare(a, b) == 0){
                         is_in_checked = true;
                         break;
                     }
@@ -528,31 +537,19 @@ BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &m
                     break;
                 }
             }
-
-            //BigInteger basis = fastExponent(a, d, n);
             BigInteger basis = n.fastExponentNewton(a, d);
-//            BigInteger basis_newton = n.fastExponentNewton(a, d);
-//            cout << ++newton_tested<<endl;
-//            if(compare(basis, basis_newton) != 0){
-//                cout << "a: "; a.printHex();
-//                cout << "d: "; d.printHex();
-//                cout << "n: "; n.printHex();
-//                cout << "basis: "; basis.printHex();
-//                cout << "basis_newton: "; basis_newton.printHex();
-//            }
-//            assert(compare(basis, basis_newton) == 0);
-            if(compare(basis, one) == 0){
+            if(BigInteger::compare(basis, BigInteger::one) == 0){
                 continue;
             }
             else{
                 bool neg_one_found = false;
                 for(int i = 0; i < s; ++i){
-                    if(compare(n_minus_1, basis) == 0){
+                    if(BigInteger::compare(n_minus_1, basis) == 0){
                         neg_one_found = true;
                         break;
                     }
                     //basis = div(mul(basis, basis), n).second;
-                    basis = n.fastExponentNewton(basis, two);
+                    basis = n.fastExponentNewton(basis, BigInteger::two);
                 }
                 if(!neg_one_found){
                     is_prime = false;
@@ -561,11 +558,42 @@ BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &m
             }
         }
         if(is_prime){
-            cout<< "number tested:" <<tested << endl;
-            return n;
+            bool flag_set;
+            mutex->lock();
+            flag_set = *finish_flag;
+            mutex->unlock();
+            if(!flag_set){
+                mutex->lock();
+                *result = n.getBits();
+                *finish_flag = true;
+                mutex->unlock();
+            }
+            break;
         }
         ++tested;
     }
+}
+
+BigInteger BigInteger::getPrimeWithin(const BigInteger &min, const BigInteger &max, int worker, int test_iter_cnt) {
+    std::mutex mutex;
+    bool finished = false;
+    u64vec result;
+    int thread_cnt = worker;
+    if(worker < 1)
+        throw BigIntegerException(ERR_INVALID_WORKER_CNT);
+    test_iter_cnt = test_iter_cnt < 16 ? 16 : test_iter_cnt;
+    test_iter_cnt = test_iter_cnt > 50 ? 50 : test_iter_cnt;
+    vector<std::thread> threads(thread_cnt);
+    for(int i = 0; i < thread_cnt; ++i){
+        threads.emplace_back(getPrimeWorker, &min, &max, &mutex, &finished, &result, test_iter_cnt);
+    }
+    for(auto &t:threads){
+        if(t.joinable())
+            t.join();
+    }
+
+    return BigInteger(result);
+
 }
 
 void testShr(){
@@ -680,13 +708,19 @@ void testEuclid(){
 }
 
 void testRandom(){
-    u64vec min_bits, max_bits;
-    min_bits.push_back(5);
-    max_bits.push_back(10);
-    max_bits.push_back(1);
+//    u64vec min_bits, max_bits;
+//    min_bits.push_back(5);
+//    max_bits.push_back(10);
+//    max_bits.push_back(1);
+//    std::random_device generator;
+//    for(int i = 0; i < 100; ++i)
+//    BigInteger::randomWithin(BigInteger(min_bits), BigInteger(max_bits), generator).printHex();
     std::random_device generator;
-    for(int i = 0; i < 100; ++i)
-    BigInteger::randomWithin(BigInteger(min_bits), BigInteger(max_bits), generator).printHex();
+    auto start = std::chrono::system_clock::now();
+    for(int i = 0; i < 1000; ++i)
+        BigInteger::randomWithin(BigInteger::nBitMin(768), BigInteger::nBitMax(768), generator);//.printHex(BigInteger::PRINT_MODE_SPACED);
+    auto end = std::chrono::system_clock::now();
+    cout << std::dec << duration_cast<std::chrono::milliseconds>(end - start).count() << endl;
 }
 
 void testExponent(){
@@ -700,7 +734,10 @@ void testExponent(){
 }
 
 void testPrime(){
-    BigInteger::getPrimeWithin(BigInteger::nBitMin(768),BigInteger::nBitMax(768)).printHex(BigInteger::PRINT_MODE_COMPACT);
+    auto start = system_clock::now();
+    BigInteger::getPrimeWithin(BigInteger::nBitMin(768),BigInteger::nBitMax(768), 8, 16).printHex(BigInteger::PRINT_MODE_COMPACT);
+    auto end = system_clock::now();
+    cout << std::dec <<"time cost: " << duration_cast<std::chrono::milliseconds>(end - start).count() << endl;
 }
 
 void testReverse(){
