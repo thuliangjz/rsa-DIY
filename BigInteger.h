@@ -49,6 +49,7 @@ class BigInteger {
         int getBitCnt()const{return m_cnt_bits;}
         vector<uint64_t> getBits()const{return m_vec_bits;}
         explicit BigInteger(const vector<uint64_t>&   vec);
+        explicit BigInteger():m_cnt_bits(1), m_vec_bits(1, 0), m_inverse_computed(false){}
         void printHex(int mode = PRINT_MODE_SPACED);
         inline bool isEven()const;
         BigInteger fastExponentNewton(const BigInteger& a, const BigInteger& e);

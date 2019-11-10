@@ -6,6 +6,7 @@
 #define RSA_RSA_H
 
 #include<vector>
+#include "BigInteger.h"
 using std::vector;
 class RSA {
 public:
@@ -20,6 +21,11 @@ public:
     static const int MIN_KEY_LENGTH = 256;
 public:
     void keyGen(int length);
+    RSA():m_is_key_generated(false){}
+    void printKeyInfo();
+private:
+    bool m_is_key_generated;
+    BigInteger p, q, n, e, d;
 };
 
 
